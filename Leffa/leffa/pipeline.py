@@ -8,9 +8,11 @@ import torch.nn.functional as F
 import tqdm
 from PIL import Image, ImageFilter
 from rectified_flow import RectifiedFlow
+from diffusers import DPMSolverMultistepScheduler, FlowMatchEulerDiscreteScheduler
+from diffusers.schedulers import DDIMScheduler
 
 
-class RectifiedFlowScheduler:
+class RectifiedFlowScheduler_old:
     def __init__(self, config: dict, velocity_field: nn.Module, data_shape: tuple,
                  device=torch.device("cpu"), dtype=torch.float32):
         """
@@ -116,7 +118,233 @@ class RectifiedFlowScheduler:
 
         new_latent = refined_noise_pred  # shape should be [1, 4, 128, 96]
         return (new_latent,)
-    
+
+class RectifiedFlowScheduler:
+    """
+    A minimal Euler integrator treating `velocity_field` (your UNet)
+    as the time-derivative operator dx/dt = v(t, x).
+    """
+
+    def __init__(self,
+                 velocity_field,    # your UNet module
+                 data_shape,        # e.g. (12, 1024, 768)
+                 device="cuda",
+                 dtype=torch.float32):
+        self.velocity_field = velocity_field
+        self.device = device
+        self.dtype = dtype
+        self.data_shape = data_shape
+        self.timesteps = None
+
+    def set_timesteps(self, num_inference_steps, device=None):
+        device = device or self.device
+        # uniform schedule from t=1.0 → t=0.0
+        self.timesteps = torch.linspace(1.0, 0.0, num_inference_steps, device=device)
+        self.order = 1
+
+    def scale_model_input(self, sample, t):
+        # no extra scaling needed for pure ODE integration
+        return sample
+
+    def step(self, noise_pred, t, sample, **kwargs):
+        """
+        noise_pred is ignored: we use velocity_field(sample, t) directly.
+        Returns a tuple so that pipeline.step()[0] is the next sample.
+        """
+        # compute constant dt from our uniform schedule
+        dt = self.timesteps[1] - self.timesteps[0]
+
+        # velocity_field should mirror your UNet signature:
+        #  velocity = self.velocity_field(sample, t, return_dict=False)[0]
+        velocity = self.velocity_field(
+            sample.to(self.device, dtype=self.dtype),
+            t,
+            return_dict=False
+        )[0]
+
+        # Euler update: x_{n+1} = x_n + v * dt
+        next_sample = sample + velocity * dt
+
+        # return a tuple so [0] indexing still works
+        return (next_sample, None)
+
+
+class OptimizedLeffaPipeline(object):
+    def __init__(
+        self,
+        model,
+        device="cuda",
+        # ---------------- your existing flag ----------------
+        use_rectified_flow: bool = False,
+        # ---------------- new acceleration flags ----------------
+        use_dpm_solver: bool = False,
+        use_torch_compile: bool = False,
+        use_xformers: bool = False,
+    ):
+        self.device = device
+        self.vae = model.vae.to(device)
+        self.unet_encoder = model.unet_encoder.to(device)
+        self.unet = model.unet.to(device)
+
+        # Optionally compile for speed
+        if use_torch_compile:
+            backend = "inductor"
+            self.vae           = torch.compile(self.vae,           backend=backend)
+            self.unet_encoder  = torch.compile(self.unet_encoder,  backend=backend)
+            self.unet          = torch.compile(self.unet,          backend=backend)
+
+        # Optionally enable memory‐efficient attention
+        if use_xformers and hasattr(self.unet, "enable_xformers_memory_efficient_attention"):
+            self.unet.enable_xformers_memory_efficient_attention()
+
+        # Set up scheduler: rectified flow or default
+        if use_rectified_flow:
+            base_steps = model.noise_scheduler.config.num_train_timesteps
+            base_sched = FlowMatchEulerDiscreteScheduler(
+                num_train_timesteps=base_steps,
+                use_karras_sigmas=True,  # faster, often better
+            )
+        else:
+            base_sched = model.noise_scheduler
+
+        # Optionally swap in DPMSolverMultistep for fewer steps
+        if use_dpm_solver:
+            # inherit config from the base scheduler
+            self.noise_scheduler = DPMSolverMultistepScheduler.from_config(
+                base_sched.config, use_karras_sigmas=True
+            )
+        else:
+            self.noise_scheduler = base_sched
+
+        self.sigmoid = torch.nn.Sigmoid()
+        self.relu = torch.nn.ReLU()
+
+    def prepare_extra_step_kwargs(self, generator, eta):
+        accepts = inspect.signature(self.noise_scheduler.step).parameters
+        extra = {}
+        if "eta" in accepts:
+            extra["eta"] = eta
+        if "generator" in accepts:
+            extra["generator"] = generator
+        return extra
+
+    @torch.no_grad()
+    def __call__(
+        self,
+        src_image,
+        ref_image,
+        mask,
+        densepose,
+        ref_acceleration=False,
+        num_inference_steps=50,
+        do_classifier_free_guidance=True,
+        guidance_scale=2.5,
+        generator=None,
+        eta=1.0,
+        repaint=False,
+        **kwargs,
+    ):
+        # --- mixed‐precision context for the whole forward pass ---
+        with torch.amp.autocast(self.device, enabled=True):
+            # move everything to the correct device & dtype
+            dtype = self.vae.dtype
+            src = src_image.to(device=self.device, dtype=dtype)
+            ref = ref_image.to(device=self.device, dtype=dtype)
+            m   = mask.to(device=self.device, dtype=dtype)
+            dp  = densepose.to(device=self.device, dtype=dtype)
+
+            masked = src * (m < 0.5)
+
+            # 1) VAE encode
+            with torch.no_grad():
+                masked_latent = self.vae.encode(masked).latent_dist.sample()
+                ref_latent    = self.vae.encode(ref).latent_dist.sample()
+            sf = self.vae.config.scaling_factor
+            masked_latent *= sf
+            ref_latent    *= sf
+
+            # downsample masks to latent spatial size
+            m_lat = F.interpolate(m, size=masked_latent.shape[-2:], mode="nearest")
+            dp_lat = F.interpolate(dp, size=masked_latent.shape[-2:], mode="nearest")
+
+            # 2) prepare noise
+            noise = torch.randn_like(masked_latent) * getattr(self.noise_scheduler, "init_noise_sigma", 1.0)
+            self.noise_scheduler.set_timesteps(num_inference_steps, device=self.device)
+            timesteps = self.noise_scheduler.timesteps
+            latent = noise
+
+            # 3) classifier‐free guidance setup
+            if do_classifier_free_guidance:
+                masked_latent = torch.cat([masked_latent] * 2)
+                ref_latent    = torch.cat([torch.zeros_like(ref_latent), ref_latent])
+                m_lat         = torch.cat([m_lat] * 2)
+                dp_lat        = torch.cat([dp_lat] * 2)
+
+            # 4) optional reference acceleration
+            if ref_acceleration:
+                down, ref_feats = self.unet_encoder(
+                    ref_latent, timesteps[num_inference_steps//2], encoder_hidden_states=None, return_dict=False
+                )
+
+            extra_kwargs = self.prepare_extra_step_kwargs(generator, eta)
+            order = getattr(self.noise_scheduler, "order", 1)
+            num_warmup = len(timesteps) - num_inference_steps * order
+
+            with tqdm.tqdm(total=num_inference_steps) as pb:
+                for i, t in enumerate(timesteps):
+                    inp = (
+                        torch.cat([latent] * 2) if do_classifier_free_guidance else latent
+                    )
+                    if hasattr(self.noise_scheduler, "scale_model_input"):
+                        inp = self.noise_scheduler.scale_model_input(inp, t)
+
+                    # concat conditioning
+                    model_in = torch.cat([inp, m_lat, masked_latent, dp_lat], dim=1)
+
+                    if not ref_acceleration:
+                        down, ref_feats = self.unet_encoder(ref_latent, t, encoder_hidden_states=None, return_dict=False)
+
+                    # predict noise
+                    noise_pred = self.unet(
+                        model_in, t,
+                        encoder_hidden_states=None,
+                        cross_attention_kwargs=None,
+                        added_cond_kwargs=None,
+                        reference_features=list(ref_feats),
+                        return_dict=False
+                    )[0]
+
+                    # guidance
+                    if do_classifier_free_guidance:
+                        uncond, cond = noise_pred.chunk(2)
+                        noise_pred = uncond + guidance_scale * (cond - uncond)
+                        noise_pred = rescale_noise_cfg(noise_pred, cond, guidance_rescale=guidance_scale)
+
+                    # step
+                    latent = self.noise_scheduler.step(
+                        noise_pred, t, latent, **extra_kwargs, return_dict=False
+                    )[0]
+
+                    # update bar at the right cadence
+                    if i == len(timesteps) - 1 or ((i + 1) > num_warmup and (i + 1) % order == 0):
+                        pb.update()
+
+            # 5) decode and optional repaint
+            gen_images = latent_to_image(latent, self.vae)
+
+            if repaint:
+                src_image = (src_image / 2 + 0.5).clamp(0, 1)
+                src_image = src_image.cpu().permute(0, 2, 3, 1).float().numpy()
+                src_image = numpy_to_pil(src_image)
+                mask = mask.cpu().permute(0, 2, 3, 1).float().numpy()
+                mask = numpy_to_pil(mask)
+                mask = [i.convert("RGB") for i in mask]
+                gen_image = [
+                    do_repaint(_src_image, _mask, _gen_image)
+                    for _src_image, _mask, _gen_image in zip(src_image, mask, gen_image)
+                ]
+
+        return (gen_images,)
 
 class LeffaPipeline(object):
     def __init__(

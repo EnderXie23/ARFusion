@@ -36,6 +36,7 @@ class LeffaPredictor(object):
         vt_model_hd = LeffaModel(
             pretrained_model_name_or_path="./ckpts/stable-diffusion-inpainting",
             pretrained_model="./ckpts/virtual_tryon.pth",
+            # pretrained_model="../../StableVITON/ckpts/VITONHD.ckpt",
             dtype="float16",
         )
         self.vt_inference_hd = LeffaInference(model=vt_model_hd, use_fp16=args.get("use_fp16", False), low_resolution=args.get("low_resolution", False))
@@ -47,12 +48,12 @@ class LeffaPredictor(object):
         # )
         # self.vt_inference_dc = LeffaInference(model=vt_model_dc)
 
-        pt_model = LeffaModel(
-            pretrained_model_name_or_path="./ckpts/stable-diffusion-xl-1.0-inpainting-0.1",
-            pretrained_model="./ckpts/pose_transfer.pth",
-            dtype="float16",
-        )
-        self.pt_inference = LeffaInference(model=pt_model)
+        # pt_model = LeffaModel(
+        #     pretrained_model_name_or_path="./ckpts/stable-diffusion-xl-1.0-inpainting-0.1",
+        #     pretrained_model="./ckpts/pose_transfer.pth",
+        #     dtype="float16",
+        # )
+        # self.pt_inference = LeffaInference(model=pt_model)
 
     def leffa_predict(
         self,
@@ -171,7 +172,6 @@ class LeffaPredictor(object):
 
 
 if __name__ == "__main__":
-    leffa_predictor = LeffaPredictor(use_fp16=True, low_resolution=True)
     example_dir = "./ckpts/examples"
     person1_images = list_dir(f"{example_dir}/person1")
     person2_images = list_dir(f"{example_dir}/person2")
@@ -190,7 +190,12 @@ if __name__ == "__main__":
     argparser.add_argument("--vt_repaint", action="store_true", help="Enable repainting")
     argparser.add_argument("--preprocess_garment", action="store_true", help="Enable garment preprocessing")
     argparser.add_argument("--output_dir", type=str, default="./output", help="Output directory for generated images")
+    argparser.add_argument("--use_fp16", action="store_true", help="Use FP16 for inference")
+    argparser.add_argument("--low_resolution", action="store_true", help="Use low resolution for inference")
     args = argparser.parse_args()
+
+    leffa_predictor = LeffaPredictor(use_fp16=args.use_fp16, low_resolution=args.low_resolution)
+    # leffa_predictor = LeffaPredictor(use_fp16=False, low_resolution=False)
 
     # Example usage
     src_image_path = args.src_image
@@ -207,7 +212,7 @@ if __name__ == "__main__":
     # Record start time
     import time
     start_time = time.time()
-    for _ in range(100):
+    for _ in range(2):
         gen_image, mask, densepose = leffa_predictor.leffa_predict_vt(
             src_image_path,
             ref_image_path,
@@ -222,10 +227,30 @@ if __name__ == "__main__":
         )
     # Record end time
     end_time = time.time()
-    print(f"Time taken for 100 iterations: {end_time - start_time} seconds")
+    print(f"Time taken for 50 iterations: {end_time - start_time} seconds")
+
     # Save the generated image
     gen_image_pil = Image.fromarray(gen_image)
     os.makedirs(args.output_dir, exist_ok=True)
     save_path = f"{args.output_dir}/generated_image.png"
     gen_image_pil.save(save_path)
     print(f"Generated image saved to {save_path}")
+
+    # for _step in range(1, 16):
+    #     gen_image, mask, densepose = leffa_predictor.leffa_predict_vt(
+    #         src_image_path,
+    #         ref_image_path,
+    #         ref_acceleration,
+    #         _step,
+    #         scale,
+    #         seed,
+    #         vt_model_type,
+    #         vt_garment_type,
+    #         vt_repaint,
+    #         preprocess_garment
+    #     )
+    #     gen_image_pil = Image.fromarray(gen_image)
+    #     os.makedirs(args.output_dir, exist_ok=True)
+    #     save_path = f"{args.output_dir}/generated_{_step}.png"
+    #     gen_image_pil.save(save_path)
+    #     print(f"Generated image saved to {save_path}")

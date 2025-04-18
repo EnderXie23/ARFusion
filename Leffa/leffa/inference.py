@@ -3,7 +3,7 @@ from typing import Any, Dict, Optional
 import numpy as np
 import torch
 import torch.nn as nn
-from leffa.pipeline import LeffaPipeline
+from leffa.pipeline import LeffaPipeline, OptimizedLeffaPipeline
 
 
 def pil_to_tensor(images):
@@ -27,7 +27,7 @@ class LeffaInference(object):
             self.model = model.to(self.device)
         self.model.eval()
 
-        self.pipe = LeffaPipeline(model=self.model)
+        self.pipe = OptimizedLeffaPipeline(model=self.model, use_dpm_solver=True, use_torch_compile=True)
         self.low_resolution = low_resolution
 
     def to_gpu(self, data: Dict[str, Any]) -> Dict[str, Any]:
