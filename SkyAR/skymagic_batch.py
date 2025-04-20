@@ -1,4 +1,3 @@
-import time
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2
@@ -9,6 +8,10 @@ from networks import *
 from skyboxengine import *
 import utils
 import torch
+from concurrent.futures import ThreadPoolExecutor
+import time
+import threading
+from queue import Queue
 
 # Decide which device we want to run on
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -33,11 +36,7 @@ class SkyFilter():
 
         self.net_G = define_G(input_nc=3, output_nc=1, ngf=64, netG=args.net_G).to(device)
         self.load_model()
-
-        self.video_writer = cv2.VideoWriter('demo.mp4', cv2.VideoWriter_fourcc(*'MP4V'),
-                                            20.0, (args.out_size_w, args.out_size_h))
-        self.video_writer_cat = cv2.VideoWriter('demo-cat.mp4', cv2.VideoWriter_fourcc(*'MP4V'),
-                                            20.0, (2*args.out_size_w, args.out_size_h))
+        # self.net_G = torch.compile(self.net_G)
 
         if args.save_jpgs and os.path.exists(args.output_dir) is False:
             os.mkdir(args.output_dir)
@@ -49,7 +48,7 @@ class SkyFilter():
 
         print('loading the best checkpoint...')
         checkpoint = torch.load(os.path.join(self.ckptdir, 'best_ckpt.pt'),
-                                map_location=device)
+                                map_location=None if torch.cuda.is_available() else device)
         # checkpoint = torch.load(os.path.join(self.ckptdir, 'last_ckpt.pt'))
         self.net_G.load_state_dict(checkpoint['model_G_state_dict'])
         self.net_G.to(device)
@@ -107,8 +106,11 @@ class SkyFilter():
 
 
     def run_imgseq(self):
-
         print('running evaluation...')
+        self.video_writer = cv2.VideoWriter('demo.mp4', cv2.VideoWriter_fourcc(*'MP4V'),
+                                            20.0, (args.out_size_w, args.out_size_h))
+        self.video_writer_cat = cv2.VideoWriter('demo-cat.mp4', cv2.VideoWriter_fourcc(*'MP4V'),
+                                            20.0, (2*args.out_size_w, args.out_size_h))
         img_names = os.listdir(self.datadir)
         img_HD_prev = None
 
@@ -134,9 +136,6 @@ class SkyFilter():
             print('processing: %d / %d ...' % (idx, len(img_names)))
 
             img_HD_prev = img_HD
-
-
-
 
     def run_video(self):
 
@@ -174,27 +173,148 @@ class SkyFilter():
             else:  # if reach the last frame
                 break
 
-
     def run(self):
         if self.input_mode == 'seq':
+            print('sequence mode')
             self.run_imgseq()
+        # elif self.input_mode == 'video':
+        #     print('video mode')
+        #     self.run_video()
         elif self.input_mode == 'video':
-            self.run_video()
+            self.run_video_batch()
+            # self.run_video()
+        elif self.input_mode == 'webcam':
+            self.run_webcam()
         else:
             print('wrong input_mode, select one in [seq, video]')
             exit()
 
+class DualVideoWriterThreaded:
+    def __init__(self, path1, path2, size1, size2, fps=20.0, codec='MP4V'):
+        self.queue = Queue()
+        fourcc = cv2.VideoWriter_fourcc(*codec)
+        self.writer1 = cv2.VideoWriter(path1, fourcc, fps, size1)
+        self.writer2 = cv2.VideoWriter(path2, fourcc, fps, size2)
+        self.size1 = size1
+        self.size2 = size2
+        self.thread = threading.Thread(target=self._worker)
+        self.thread.start()
+    
+    def _worker(self):
+        while True:
+            item = self.queue.get()
+            if item is None:
+                break
+            frame1, frame2 = item
+            self.writer1.write(frame1)
+            self.writer2.write(frame2)
+            self.queue.task_done()
+
+    def write(self, frame, frame_cat):
+        self.queue.put((frame, frame_cat))
+
+    def close(self):
+        self.queue.put(None)
+        self.thread.join()
+        self.writer1.release()
+        self.writer2.release()
+
+class SkyFilterBatched(SkyFilter):
+    def __init__(self, args):
+        super().__init__(args)
+        self.dual_video_writer = DualVideoWriterThreaded(
+            path1='demo.mp4',
+            path2='demo-cat.mp4',
+            size1=(self.out_size_w, self.out_size_h),  # 注意这里是 (width, height)
+            size2=(2 * self.out_size_w, self.out_size_h),  # 注意这里是 (width, height)
+        )
+
+    def run_video_batch(self):
+        print('running batched video processing...')
+
+        cap = cv2.VideoCapture(self.datadir)
+        m_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        idx = 0
+        BATCH_SIZE = 16
+
+        while True:
+            t1 = time.time()
+            img_HD_batch = []
+            idx_batch = []
+
+            for _ in range(BATCH_SIZE):
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+                img_HD = self.cvtcolor_and_resize(frame)
+                img_HD_batch.append(img_HD)
+                idx_batch.append(idx)
+                idx += 1
+
+            if not img_HD_batch:
+                break
+
+            # 使用上一帧，或用自己代替
+            img_HD_prev_batch = [img_HD_batch[i - 1] if i > 0 else img_HD_batch[0] for i in range(len(img_HD_batch))]
+            t2 = time.time()
+            print(f'Preprocessing time: {t2 - t1:.4f} seconds')
+
+            results = self.synthesize_batch(img_HD_batch, img_HD_prev_batch)
+            t3 = time.time()
+            print(f'Processing time for batch: {t3 - t2:.4f} seconds')
+
+            for i, (syneth, G_pred, skymask) in enumerate(results):
+                self.write_video(img_HD_batch[i], syneth)
+                print(f'Processed frame {idx_batch[i]} / {m_frames}')
+            t4 = time.time()
+            print(f'Writing time: {t4 - t3:.4f} seconds')
+
+        cap.release()
+        self.dual_video_writer.close()
+        # cv2.destroyAllWindows()
+
+    def synthesize_batch(self, imgs_HD, imgs_HD_prev):
+        h, w, c = imgs_HD[0].shape
+
+        imgs_tensor = []
+        for img_HD in imgs_HD:
+            img = cv2.resize(img_HD, (self.in_size_w, self.in_size_h))
+            img = np.array(img, dtype=np.float32)
+            img = torch.tensor(img).permute([2, 0, 1]).unsqueeze(0)
+            imgs_tensor.append(img)
+
+        imgs_tensor = torch.cat(imgs_tensor, dim=0).to(device)
+
+        with torch.no_grad():
+            G_preds = self.net_G(imgs_tensor)
+            G_preds = torch.nn.functional.interpolate(G_preds, (h, w), mode='bicubic', align_corners=False)
+
+        results = []
+        for i in range(G_preds.shape[0]):
+            G_pred = G_preds[i].permute(1, 2, 0)
+            G_pred = torch.cat([G_pred] * 3, dim=-1)
+            G_pred = np.clip(G_pred.cpu().numpy(), 0, 1)
+            skymask = self.skyboxengine.skymask_refinement(G_pred, imgs_HD[i])
+            syneth = self.skyboxengine.skyblend(imgs_HD[i], imgs_HD_prev[i], skymask)
+            results.append((syneth, G_pred, skymask))
+
+        return results
+
+    def write_video(self, img_HD, syneth):
+        frame = (syneth[:, :, ::-1] * 255).astype(np.uint8)
+        frame_cat = np.concatenate([img_HD, syneth], axis=1)
+        frame_cat = (frame_cat[:, :, ::-1] * 255).astype(np.uint8)
+
+        self.dual_video_writer.write(frame, frame_cat)
+
 
 if __name__ == '__main__':
-
     config_path = parser.parse_args().path
     args = utils.parse_config(config_path)
-    sf = SkyFilter(args)
-
-    # Set a timer
-    start_time = time.time()
+    sf = SkyFilterBatched(args)
+    # sf = SkyFilter(args)
+    T1 = time.time()
     sf.run()
-    end_time = time.time()
-    print("Time taken: ", end_time - start_time)
-
-
+    T2 = time.time()
+    print('Time: %f' % (T2 - T1))
