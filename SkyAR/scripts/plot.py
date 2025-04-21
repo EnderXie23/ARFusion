@@ -111,7 +111,7 @@ def extract_losses(log_file):
     i = 0
     with open(log_file, 'r') as f:
         for line in f:
-            match = re.search(rf'Is_training: False\. \[{i},199\]\[101,111\], G_loss: ([0-9]*\.?[0-9]+)', line)
+            match = re.search(rf'Is_training: False\. \[{i},99\]\[101,111\], G_loss: ([0-9]*\.?[0-9]+)', line)
             if match:
                 losses.append(float(match.group(1)))
                 i += 1

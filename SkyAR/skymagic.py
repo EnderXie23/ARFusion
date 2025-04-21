@@ -5,6 +5,9 @@ import cv2
 import os
 import glob
 import argparse
+
+from tqdm import tqdm
+import time
 from networks import *
 from skyboxengine import *
 import utils
@@ -175,11 +178,46 @@ class SkyFilter():
                 break
 
 
+    def run_test(self, test_loops=50):
+
+        cap = cv2.VideoCapture(self.datadir)
+        ret, frame = cap.read()
+
+        def _run_instance(img_HD):
+            h, w, c = img_HD.shape
+            img = cv2.resize(img_HD, (self.in_size_w, self.in_size_h))
+
+            img = np.array(img, dtype=np.float32)
+            img = torch.tensor(img).permute([2, 0, 1]).unsqueeze(0)
+            with torch.no_grad():
+                G_pred = self.net_G(img.to(device))
+                G_pred = torch.nn.functional.interpolate(G_pred, (h, w), mode='bicubic', align_corners=False)
+                G_pred = G_pred[0, :].permute([1, 2, 0])
+                G_pred = torch.cat([G_pred, G_pred, G_pred], dim=-1)
+                G_pred = np.array(G_pred.detach().cpu())
+                G_pred = np.clip(G_pred, a_max=1.0, a_min=0.0)
+
+        if ret:
+            img_HD = self.cvtcolor_and_resize(frame)
+            start_time = time.time()
+            for _ in tqdm(range(test_loops)):
+                _run_instance(img_HD)
+        else:
+            print("Error: Unable to read the video frame.")
+            return
+
+        end_time = time.time()
+        print("Time taken for %d iterations: " % test_loops, end_time - start_time)
+        print("Average time per iteration: ", (end_time - start_time) / test_loops)
+            
+
     def run(self):
         if self.input_mode == 'seq':
             self.run_imgseq()
         elif self.input_mode == 'video':
             self.run_video()
+        elif self.input_mode == 'test':
+            self.run_test(200)
         else:
             print('wrong input_mode, select one in [seq, video')
             exit()
