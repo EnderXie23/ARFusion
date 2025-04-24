@@ -94,6 +94,9 @@ class SkyBox():
     def get_skybg_from_box(self, m):
 
         self.M = update_transformation_matrix(self.M, m)
+        # if m is not None:
+        #     self.M_temp = m.copy()
+        #     self.M_part = update_transformation_matrix(self.M, self.M_temp)
 
         nbgs, bgh, bgw, c = self.skybox_imgx2.shape
         fetch_id = self.frame_id % nbgs
@@ -104,6 +107,9 @@ class SkyBox():
         skybg = skybg_warp[0:self.args.out_size_h, 0:self.args.out_size_w, :]
 
         self.frame_id += 1
+        # if self.frame_id % batch_size == 0:
+        #     self.M = self.M_part.copy()
+        #     self.M_temp = np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32)
 
         return np.array(skybg, np.float32)/255.
 
@@ -132,6 +138,7 @@ class SkyBox():
         if prev_pts is None:
             print('no feature point detected')
             return np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32)
+            # return None
 
         # Calculate optical flow (i.e. track feature points)
         curr_pts, status, err = cv2.calcOpticalFlowPyrLK(
@@ -141,12 +148,14 @@ class SkyBox():
         if idx.size == 0:
             print('no good point matched')
             return np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32)
+            # return None
 
         prev_pts, curr_pts = removeOutliers(prev_pts, curr_pts)
 
         if curr_pts.shape[0] < 10:
             print('no good point matched')
             return np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32)
+            # return None
 
         # limit the motion to translation + rotation
         dxdyda = estimate_partial_transform((

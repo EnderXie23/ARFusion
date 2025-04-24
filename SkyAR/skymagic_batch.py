@@ -9,13 +9,13 @@ from skyboxengine import *
 import utils
 import torch
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 import time
 import threading
 from queue import Queue
 
 # Decide which device we want to run on
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
 
 parser = argparse.ArgumentParser(description='SKYAR')
 parser.add_argument('--path', type=str, default='./config/config-canyon-jupiter.json', metavar='str',
@@ -96,11 +96,8 @@ class SkyFilter():
 
 
     def cvtcolor_and_resize(self, img_HD):
-
         img_HD = cv2.cvtColor(img_HD, cv2.COLOR_BGR2RGB)
-        img_HD = np.array(img_HD / 255., dtype=np.float32)
         img_HD = cv2.resize(img_HD, (self.out_size_w, self.out_size_h))
-
         return img_HD
 
 
@@ -181,8 +178,8 @@ class SkyFilter():
         #     print('video mode')
         #     self.run_video()
         elif self.input_mode == 'video':
-            self.run_video_batch()
-            # self.run_video()
+            # self.run_video_batch()
+            self.run_video()
         elif self.input_mode == 'webcam':
             self.run_webcam()
         else:
@@ -228,6 +225,9 @@ class SkyFilterBatched(SkyFilter):
             size1=(self.out_size_w, self.out_size_h),  # 注意这里是 (width, height)
             size2=(2 * self.out_size_w, self.out_size_h),  # 注意这里是 (width, height)
         )
+        self.batch_size = 4
+        self.cali_size = 4
+        self.skyengines = [SkyBox(args) for _ in range(self.batch_size)]
 
     def run_video_batch(self):
         print('running batched video processing...')
@@ -235,37 +235,46 @@ class SkyFilterBatched(SkyFilter):
         cap = cv2.VideoCapture(self.datadir)
         m_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         idx = 0
-        BATCH_SIZE = 16
+        batch_cali = self.batch_size * self.cali_size
+        img_HD_prev_batch = None
 
         while True:
             t1 = time.time()
-            img_HD_batch = []
             idx_batch = []
-
-            for _ in range(BATCH_SIZE):
+            frames = []
+            for _ in range(self.batch_size):
                 ret, frame = cap.read()
                 if not ret:
                     break
-
-                img_HD = self.cvtcolor_and_resize(frame)
-                img_HD_batch.append(img_HD)
+                frames.append(frame)
                 idx_batch.append(idx)
                 idx += 1
 
-            if not img_HD_batch:
+            if not frames:
                 break
+            with ThreadPoolExecutor() as executor:
+                img_HD_batch_uint8 = list(executor.map(self.cvtcolor_and_resize, frames))
+                img_HD_batch = [img.astype(np.float32) / 255.0 for img in img_HD_batch_uint8]
 
             # 使用上一帧，或用自己代替
-            img_HD_prev_batch = [img_HD_batch[i - 1] if i > 0 else img_HD_batch[0] for i in range(len(img_HD_batch))]
+            # img_HD_prev_batch = [img_HD_batch[i - 1] if i > 0 else img_HD_batch[0] for i in range(len(img_HD_batch))]
             t2 = time.time()
             print(f'Preprocessing time: {t2 - t1:.4f} seconds')
 
+            if img_HD_prev_batch is None:
+                img_HD_prev_batch = img_HD_batch.copy()
+            if idx % batch_cali == 0:
+                self.calibrate_skyengine()
+                img_HD_prev_batch = [img_HD_prev_batch[self.batch_size-1]] * self.batch_size
+                print('Calibration at frame', idx)
             results = self.synthesize_batch(img_HD_batch, img_HD_prev_batch)
+            img_HD_prev_batch = img_HD_batch.copy()
             t3 = time.time()
             print(f'Processing time for batch: {t3 - t2:.4f} seconds')
 
-            for i, (syneth, G_pred, skymask) in enumerate(results):
-                self.write_video(img_HD_batch[i], syneth)
+            # for i, (syneth, G_pred, skymask) in enumerate(results):
+            for i, syneth in enumerate(results):
+                self.write_video(img_HD_batch_uint8[i], syneth)
                 print(f'Processed frame {idx_batch[i]} / {m_frames}')
             t4 = time.time()
             print(f'Writing time: {t4 - t3:.4f} seconds')
@@ -273,47 +282,65 @@ class SkyFilterBatched(SkyFilter):
         cap.release()
         self.dual_video_writer.close()
         # cv2.destroyAllWindows()
+    
+    def calibrate_skyengine(self):
+        M = self.skyengines[self.batch_size-1].M.copy()
+        for i in range(self.batch_size-1):
+            self.skyengines[i].M = M.copy()
 
+    def process_frame(self, i, imgs_HD, imgs_HD_prev, G_preds):
+        skyengine = self.skyengines[i]
+        G_pred = G_preds[i].permute(1, 2, 0)
+        G_pred = torch.cat([G_pred] * 3, dim=-1)
+        G_pred_np = np.clip(G_pred.cpu().numpy(), 0, 1)
+        skymask = skyengine.skymask_refinement(G_pred_np, imgs_HD[i])
+        syneth = skyengine.skyblend(imgs_HD[i], imgs_HD_prev[i], skymask)
+        return syneth
+    
     def synthesize_batch(self, imgs_HD, imgs_HD_prev):
+        t1 = time.time()
         h, w, c = imgs_HD[0].shape
 
-        imgs_tensor = []
-        for img_HD in imgs_HD:
-            img = cv2.resize(img_HD, (self.in_size_w, self.in_size_h))
-            img = np.array(img, dtype=np.float32)
-            img = torch.tensor(img).permute([2, 0, 1]).unsqueeze(0)
-            imgs_tensor.append(img)
+        imgs_np = np.stack([
+            cv2.resize(img, (self.in_size_w, self.in_size_h)).astype(np.float32)
+            for img in imgs_HD
+        ], axis=0)  # shape: (B, H, W, C)
 
-        imgs_tensor = torch.cat(imgs_tensor, dim=0).to(device)
+        imgs_tensor = torch.from_numpy(imgs_np).permute(0, 3, 1, 2).to(device)
+        t2 = time.time()
 
         with torch.no_grad():
             G_preds = self.net_G(imgs_tensor)
             G_preds = torch.nn.functional.interpolate(G_preds, (h, w), mode='bicubic', align_corners=False)
+        t3 = time.time()
 
-        results = []
-        for i in range(G_preds.shape[0]):
-            G_pred = G_preds[i].permute(1, 2, 0)
-            G_pred = torch.cat([G_pred] * 3, dim=-1)
-            G_pred = np.clip(G_pred.cpu().numpy(), 0, 1)
-            skymask = self.skyboxengine.skymask_refinement(G_pred, imgs_HD[i])
-            syneth = self.skyboxengine.skyblend(imgs_HD[i], imgs_HD_prev[i], skymask)
-            results.append((syneth, G_pred, skymask))
+        # results = [self.process_frame(i, imgs_HD, imgs_HD_prev, G_preds, self.batch_size) for i in range(G_preds.shape[0])]
+
+        partial_func = partial(self.process_frame, imgs_HD=imgs_HD, imgs_HD_prev=imgs_HD_prev, G_preds=G_preds)
+        with ThreadPoolExecutor() as executor:
+            results = list(executor.map(partial_func, range(G_preds.shape[0])))
+
+        t4 = time.time()
+        # print(f'\tProcessing time1: {t2 - t1:.4f} seconds')
+        # print(f'\tProcessing time2: {t3 - t2:.4f} seconds')
+        # print(f'\tProcessing time3: {t4 - t3:.4f} seconds')
 
         return results
 
     def write_video(self, img_HD, syneth):
-        frame = (syneth[:, :, ::-1] * 255).astype(np.uint8)
-        frame_cat = np.concatenate([img_HD, syneth], axis=1)
-        frame_cat = (frame_cat[:, :, ::-1] * 255).astype(np.uint8)
-
+        # frame = (syneth[:, :, ::-1] * 255).astype(np.uint8)
+        # frame_cat = np.concatenate([img_HD, syneth], axis=1)
+        # frame_cat = (frame_cat[:, :, ::-1] * 255).astype(np.uint8)
+        # img_HD = (img_HD * 255).astype(np.uint8)
+        frame = cv2.cvtColor((syneth * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
+        frame_cat = cv2.hconcat([img_HD, frame])  # 注意这里 frame 已经是 uint8+BGR
         self.dual_video_writer.write(frame, frame_cat)
-
 
 if __name__ == '__main__':
     config_path = parser.parse_args().path
     args = utils.parse_config(config_path)
-    sf = SkyFilterBatched(args)
-    # sf = SkyFilter(args)
+    # sf = SkyFilterBatched(args)
+    sf = SkyFilter(args)
     T1 = time.time()
     sf.run()
     T2 = time.time()
