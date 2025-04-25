@@ -178,8 +178,8 @@ class SkyFilter():
         #     print('video mode')
         #     self.run_video()
         elif self.input_mode == 'video':
-            # self.run_video_batch()
-            self.run_video()
+            self.run_video_batch()
+            # self.run_video()
         elif self.input_mode == 'webcam':
             self.run_webcam()
         else:
@@ -339,8 +339,8 @@ class SkyFilterBatched(SkyFilter):
 if __name__ == '__main__':
     config_path = parser.parse_args().path
     args = utils.parse_config(config_path)
-    # sf = SkyFilterBatched(args)
-    sf = SkyFilter(args)
+    sf = SkyFilterBatched(args)
+    # sf = SkyFilter(args)
     T1 = time.time()
     sf.run()
     T2 = time.time()
