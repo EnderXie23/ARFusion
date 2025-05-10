@@ -52,7 +52,8 @@ class SkyFilter():
 
         print('loading the best checkpoint...')
         checkpoint = torch.load(os.path.join(self.ckptdir, 'best_ckpt.pt'),
-                                map_location=device)
+                                map_location=device,
+                                weights_only=False)
         # checkpoint = torch.load(os.path.join(self.ckptdir, 'last_ckpt.pt'))
         self.net_G.load_state_dict(checkpoint['model_G_state_dict'])
         self.net_G.to(device)
@@ -88,7 +89,7 @@ class SkyFilter():
             G_pred = torch.nn.functional.interpolate(G_pred, (h, w), mode='bicubic', align_corners=False)
             G_pred = G_pred[0, :].permute([1, 2, 0])
             G_pred = torch.cat([G_pred, G_pred, G_pred], dim=-1)
-            G_pred = np.array(G_pred.detach().cpu())
+            G_pred = G_pred.detach().cpu().numpy()
             G_pred = np.clip(G_pred, a_max=1.0, a_min=0.0)
 
         skymask = self.skyboxengine.skymask_refinement(G_pred, img_HD)
@@ -194,7 +195,7 @@ class SkyFilter():
                 G_pred = torch.nn.functional.interpolate(G_pred, (h, w), mode='bicubic', align_corners=False)
                 G_pred = G_pred[0, :].permute([1, 2, 0])
                 G_pred = torch.cat([G_pred, G_pred, G_pred], dim=-1)
-                G_pred = np.array(G_pred.detach().cpu())
+                G_pred = G_pred.detach().cpu().numpy()
                 G_pred = np.clip(G_pred, a_max=1.0, a_min=0.0)
 
         if ret:

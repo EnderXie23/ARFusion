@@ -117,7 +117,7 @@ class SkyBox():
     def skybox_tracking(self, frame, frame_prev, skymask):
 
         if np.mean(skymask) < 0.05: # Set to true for debugging
-            print('sky area is too small')
+            # print('sky area is too small')
             return np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32)
 
         prev_gray = cv2.cvtColor(frame_prev, cv2.COLOR_RGB2GRAY)
