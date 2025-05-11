@@ -125,15 +125,15 @@ class SkyBox():
         curr_gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
         curr_gray = np.array(255*curr_gray, dtype=np.uint8)
 
-        mask = np.array(skymask[:,:,0] > 0.99, dtype=np.uint8)
+        mask = np.array(skymask.mean(axis=2) > 0.3, dtype=np.uint8)
 
-        template_size = int(0.05*mask.shape[0])
+        template_size = int(0.02*mask.shape[0])
         mask = cv2.erode(mask, np.ones([template_size, template_size]))
 
         # ShiTomasi corner detection
         prev_pts = cv2.goodFeaturesToTrack(
             prev_gray, mask=mask, maxCorners=200,
-            qualityLevel=0.01, minDistance=30, blockSize=3)
+            qualityLevel=0.01, minDistance=15, blockSize=3)
 
         if prev_pts is None:
             print('no feature point detected')

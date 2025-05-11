@@ -4,7 +4,7 @@
 
   "input_mode": "video",
   "datadir": "./test_videos/test.mp4",
-  "skybox": "sunset.jpg",
+  "skybox": "galaxy.jpg",
 
   "in_size_w": 384,
   "in_size_h": 384,
