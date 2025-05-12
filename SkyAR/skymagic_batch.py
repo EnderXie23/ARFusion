@@ -281,13 +281,17 @@ class SkyFilterBatched(SkyFilter):
         for i in range(self.batch_size-1):
             self.skyengines[i].M = M.copy()
 
-    def process_frame(self, i, imgs_HD, imgs_HD_prev, G_preds):
+    def process_frame(self, i, imgs_HD, imgs_HD_prev, G_preds, m=None):
         skyengine = self.skyengines[i]
         G_pred = G_preds[i].permute(1, 2, 0)
         G_pred = torch.cat([G_pred] * 3, dim=-1)
         G_pred_np = np.clip(G_pred.cpu().numpy(), 0, 1)
         skymask = skyengine.skymask_refinement(G_pred_np, imgs_HD[i])
-        syneth = skyengine.skyblend(imgs_HD[i], imgs_HD_prev[i], skymask)
+        if i < 2:
+            syneth = skyengine.skyblend(imgs_HD[i], imgs_HD_prev[-2 + i], skymask, m=m)
+        else:
+            syneth = skyengine.skyblend(imgs_HD[i], imgs_HD[i-2], skymask, m=m)
+        # syneth = skyengine.skyblend(imgs_HD[i], imgs_HD_prev[i], skymask, m=m)
         return syneth
     
     def synthesize_batch(self, imgs_HD, imgs_HD_prev):
@@ -297,16 +301,24 @@ class SkyFilterBatched(SkyFilter):
             cv2.resize(img, (self.in_size_w, self.in_size_h)).astype(np.float32)
             for img in imgs_HD
         ], axis=0)  # shape: (B, H, W, C)
-
         imgs_tensor = torch.from_numpy(imgs_np).permute(0, 3, 1, 2).to(device)
 
         with torch.no_grad():
             G_preds = self.net_G(imgs_tensor)
             G_preds = torch.nn.functional.interpolate(G_preds, (h, w), mode='bicubic', align_corners=False)
 
-        partial_func = partial(self.process_frame, imgs_HD=imgs_HD, imgs_HD_prev=imgs_HD_prev, G_preds=G_preds)
+        # skyengine = self.skyengines[0]
+        # G_pred = G_preds[0].permute(1, 2, 0)
+        # G_pred = torch.cat([G_pred] * 3, dim=-1)
+        # G_pred_np = np.clip(G_pred.cpu().numpy(), 0, 1)
+        # skymask = skyengine.skymask_refinement(G_pred_np, imgs_HD[0])
+        # syneth, m = skyengine.skyblend(imgs_HD[0], imgs_HD_prev[0], skymask, return_transform=True)
+        # results = [syneth]
+
+        partial_func = partial(self.process_frame, imgs_HD=imgs_HD, imgs_HD_prev=imgs_HD_prev, G_preds=G_preds, m=None)
         with ThreadPoolExecutor() as executor:
             results = list(executor.map(partial_func, range(G_preds.shape[0])))
+        # results.extend(_results)
 
         return results
 

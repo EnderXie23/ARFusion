@@ -5,8 +5,17 @@ import asyncio
 import json
 import utils
 from skymagic_batch import SkyFilterBatched
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 app = FastAPI()
+
+# Mount the app on a html file
+@app.get("/")
+async def get_index():
+    # assumes static/index.html exists
+    return FileResponse("static/index.html")
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # load a default config on startup
 config = utils.parse_config('./config/test.json')
@@ -95,7 +104,10 @@ async def websocket_endpoint(ws: WebSocket):
             frame_buffer.clear()
 
     except Exception as e:
-        print(f"WebSocket closed: {e}")
+        print(f"WebSocket closed: {e.with_traceback(None)}")
     finally:
-        await ws.close()
+        try:
+            await ws.close()
+        except RuntimeError as e:
+            print(f"Cancelling any future send.")
         print("Connection teardown complete")

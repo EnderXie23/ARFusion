@@ -125,7 +125,7 @@ class SkyBox():
         curr_gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
         curr_gray = np.array(255*curr_gray, dtype=np.uint8)
 
-        mask = np.array(skymask.mean(axis=2) > 0.3, dtype=np.uint8)
+        mask = np.array(skymask.mean(axis=2) > 0.1, dtype=np.uint8)
 
         template_size = int(0.02*mask.shape[0])
         mask = cv2.erode(mask, np.ones([template_size, template_size]))
@@ -133,7 +133,7 @@ class SkyBox():
         # ShiTomasi corner detection
         prev_pts = cv2.goodFeaturesToTrack(
             prev_gray, mask=mask, maxCorners=200,
-            qualityLevel=0.01, minDistance=15, blockSize=3)
+            qualityLevel=0.01, minDistance=20, blockSize=5)
 
         if prev_pts is None:
             print('no feature point detected')
@@ -146,14 +146,14 @@ class SkyBox():
         # Filter only valid points
         idx = np.where(status == 1)[0]
         if idx.size == 0:
-            print('no good point matched')
+            print('no good point matched 1.')
             return np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32)
             # return None
 
         prev_pts, curr_pts = removeOutliers(prev_pts, curr_pts)
 
-        if curr_pts.shape[0] < 10:
-            print('no good point matched')
+        if curr_pts.shape[0] < 5:
+            print(f'no good point matched. Expected at least 5, got {curr_pts.shape[0]}')
             return np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32)
             # return None
 
@@ -199,9 +199,9 @@ class SkyBox():
         return syneth_with_halo
 
 
-    def skyblend(self, img, img_prev, skymask):
-
-        m = self.skybox_tracking(img, img_prev, skymask)
+    def skyblend(self, img, img_prev, skymask, return_transform=False, m=None):
+        if m is None:
+            m = self.skybox_tracking(img, img_prev, skymask)
 
         skybg = self.get_skybg_from_box(m)
 
@@ -215,4 +215,6 @@ class SkyBox():
         if 'rainy' in self.args.skybox:
             syneth = self.rainmodel.forward(syneth)
 
+        if return_transform:
+            return np.clip(syneth, a_min=0, a_max=1), m
         return np.clip(syneth, a_min=0, a_max=1)
