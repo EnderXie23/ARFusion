@@ -27,7 +27,7 @@ class LeffaInference(object):
             self.model = model.to(self.device)
         self.model.eval()
 
-        self.pipe = OptimizedLeffaPipeline(model=self.model, use_dpm_solver=True, use_torch_compile=True)
+        self.pipe = OptimizedLeffaPipeline(model=self.model, use_dpm_solver=True, use_torch_compile=False)
         self.low_resolution = low_resolution
 
     def to_gpu(self, data: Dict[str, Any]) -> Dict[str, Any]:

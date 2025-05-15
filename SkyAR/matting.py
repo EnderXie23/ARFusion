@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import os
 
 import utils
-from networks import *
+from ARFusion.SkyAR.skyar_networks import *
 
 import torch
 # torch.cuda.current_device()

@@ -1,14 +1,45 @@
+import os, sys
+os.environ["TQDM_DISABLE"] = "1" # Disable tqdm progress bar
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), 'Leffa')))
+import leffa_worker
+
 from fastapi import FastAPI, WebSocket
 import cv2
 import numpy as np
 import asyncio
 import json
-import utils
-from skymagic_batch import SkyFilterBatched
+import SkyAR.utils as skyar_utils
+from SkyAR.skymagic_batch import SkyFilterBatched
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from PIL import Image
+from concurrent.futures import ProcessPoolExecutor
+import threading
 
+leffa_executor = ProcessPoolExecutor(max_workers=3, initializer=leffa_worker.init_worker)
 app = FastAPI()
+os.chdir('/root/ARFusion/SkyAR')
+src_image_path = "/root/autodl-tmp/data/ckpts/examples/person1/01350_00.jpg"  # 替换为你想用于试穿的图片
+ref_image_path = "/root/autodl-tmp/data/ckpts/examples/garment/garment.png"  # 替换为你想用于试穿的默认衣服图片
+
+def warmup_leffa():
+    print("[WARMUP] Starting Leffa warmup...")
+    img = cv2.imread(src_image_path)
+    _, enc = cv2.imencode(".jpg", img)
+    frame_bytes = enc.tobytes()
+    try:
+        fut = leffa_executor.submit(
+            leffa_worker.run_leffa,
+            frame_bytes,
+            ref_image_path
+        )
+        _ = fut.result(timeout=60)
+        print("[WARMUP] Leffa warmup done.")
+    except Exception as e:
+        print(f"[WARMUP ERROR] {e}")
+
+# 启动一个线程做 warmup，避免阻塞主线程
+threading.Thread(target=warmup_leffa, daemon=True).start()
 
 # Mount the app on a html file
 @app.get("/")
@@ -18,7 +49,7 @@ async def get_index():
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # load a default config on startup
-config = utils.parse_config('./config/test.json')
+config = skyar_utils.parse_config('./config/test.json')
 skyfilter = SkyFilterBatched(config)
 batch_size = skyfilter.batch_size
 
@@ -35,7 +66,7 @@ async def websocket_endpoint(ws: WebSocket):
         new_cfg = json.loads(msg)
         print("Received new config:", new_cfg)
         # 2) **reinitialize our filter** with the new parameters
-        args = utils.Struct(**new_cfg)
+        args = skyar_utils.Struct(**new_cfg)
         skyfilter = SkyFilterBatched(args)
         batch_size = skyfilter.batch_size
         await ws.send_text("CONFIG_UPDATED")
@@ -48,19 +79,52 @@ async def websocket_endpoint(ws: WebSocket):
     # Per-connection buffers
     frame_buffer    = []
     img_HD_prev_buf = None
-    cali_batch = init_cali_batch = 2
+    cali_batch = init_cali_batch = 4
+    frame_num = 0
+    per_frame_num = 100
 
     try:
         loop = asyncio.get_running_loop()
         while True:
             # receive raw bytes (the actual video frames)
             data = await ws.receive_bytes()
-            frame = cv2.imdecode(
-                np.frombuffer(data, np.uint8),
-                cv2.IMREAD_COLOR
-            )
+            frame_num += 1
+            if frame_num % per_frame_num != 0:
+                continue
+            # frame = cv2.imdecode(
+            #     np.frombuffer(data, np.uint8),
+            #     cv2.IMREAD_COLOR
+            # )
+
+            # # --- Step 1: Save current frame temporarily for Leffa ---
+            # unique_id = str(uuid.uuid4())
+            # src_image_path = f"/tmp/frame_{unique_id}.jpg"
+            # cv2.imwrite(src_image_path, frame)
+
+            try:
+                # --- Step 2: Run Leffa virtual try-on inference ---
+                loop = asyncio.get_running_loop()
+                gen_image_rgb = await loop.run_in_executor(
+                    leffa_executor,
+                    leffa_worker.run_leffa,
+                    data,  # raw bytes
+                    ref_image_path
+                )
+                # Convert output to OpenCV BGR format
+                frame = cv2.cvtColor(gen_image_rgb, cv2.COLOR_RGB2BGR)
+
+            except Exception as e:
+                print(f"LeffaPredictor error: {e}")
+
+            # finally:
+            #     if os.path.exists(src_image_path):
+            #         os.remove(src_image_path)
+
+            # print('shape:', frame.shape)
+            # Continue appending to the SkyFilter batch
             frame_buffer.append(frame)
 
+            print('buffer:', len(frame_buffer))
             # only process once we have a full batch
             if len(frame_buffer) < batch_size:
                 continue

@@ -1,5 +1,5 @@
 import cv2
-from networks import *
+from skyar_networks import *
 from sklearn.neighbors import KernelDensity
 
 

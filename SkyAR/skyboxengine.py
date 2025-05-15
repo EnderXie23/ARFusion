@@ -126,8 +126,10 @@ class SkyBox():
         curr_gray = np.array(255*curr_gray, dtype=np.uint8)
 
         mask = np.array(skymask.mean(axis=2) > 0.1, dtype=np.uint8)
+        # mask = np.array(skymask[:, :, 0] > 0.9, dtype=np.uint8)
 
-        template_size = int(0.02*mask.shape[0])
+        # template_size = int(0.02*mask.shape[0])
+        template_size = int(0.05*mask.shape[0])
         mask = cv2.erode(mask, np.ones([template_size, template_size]))
 
         # ShiTomasi corner detection

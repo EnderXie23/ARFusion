@@ -10,9 +10,9 @@ pip install "uvicorn[standard]"
 pip install -r requirements.txt
 ```
 
-Then, run the server with:
+Then, run the server with (`PYTHONWARNINGS="ignore"` is optional):
 ```bash
-uvicorn server:app --host 127.0.0.1:8001 --reload
+PYTHONWARNINGS="ignore" uvicorn server:app --host 127.0.0.1 --port 8001 --reload
 ```
 
 On your local machine (also install `uvicon[standard]`), run:

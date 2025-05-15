@@ -4,7 +4,7 @@ import cv2
 import os
 import glob
 import argparse
-from networks import *
+from skyar_networks import *
 from skyboxengine import *
 import utils
 import torch

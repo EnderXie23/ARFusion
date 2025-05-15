@@ -79,3 +79,13 @@ uvloop==0.21.0
 wandb==0.19.11
 watchfiles==1.0.5
 websockets==15.0.1
+diffusers
+einops
+rectified_flow
+fvcore
+cloudpickle
+omegaconf
+pycocotools
+av
+onnxruntime
+ninja

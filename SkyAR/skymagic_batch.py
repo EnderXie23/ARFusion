@@ -8,7 +8,7 @@ import argparse
 import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from networks import *
+from skyar_networks import *
 from skyboxengine import *
 import utils
 import torch
@@ -287,11 +287,11 @@ class SkyFilterBatched(SkyFilter):
         G_pred = torch.cat([G_pred] * 3, dim=-1)
         G_pred_np = np.clip(G_pred.cpu().numpy(), 0, 1)
         skymask = skyengine.skymask_refinement(G_pred_np, imgs_HD[i])
-        if i < 2:
-            syneth = skyengine.skyblend(imgs_HD[i], imgs_HD_prev[-2 + i], skymask, m=m)
-        else:
-            syneth = skyengine.skyblend(imgs_HD[i], imgs_HD[i-2], skymask, m=m)
-        # syneth = skyengine.skyblend(imgs_HD[i], imgs_HD_prev[i], skymask, m=m)
+        # if i < 2:
+        #     syneth = skyengine.skyblend(imgs_HD[i], imgs_HD_prev[-2 + i], skymask, m=m)
+        # else:
+        #     syneth = skyengine.skyblend(imgs_HD[i], imgs_HD[i-2], skymask, m=m)
+        syneth = skyengine.skyblend(imgs_HD[i], imgs_HD_prev[i], skymask, m=m)
         return syneth
     
     def synthesize_batch(self, imgs_HD, imgs_HD_prev):

@@ -1,12 +1,14 @@
+# python run.py --ref_acceleration --use_fp16 --low_resolution --step 10
 import os
 import numpy as np
 from PIL import Image
+import cv2
 from leffa.transform import LeffaTransform
 from leffa.model import LeffaModel
 from leffa.inference import LeffaInference
 from leffa_utils.garment_agnostic_mask_predictor import AutoMasker
 from leffa_utils.densepose_predictor import DensePosePredictor
-from leffa_utils.utils import resize_and_center, list_dir, get_agnostic_mask_hd, get_agnostic_mask_dc, preprocess_garment_image
+from leffa_utils.utils import resize_and_center, list_dir, get_agnostic_mask_hd, get_agnostic_mask_dc, preprocess_garment_image, resize_to_fixed_size
 from preprocess.humanparsing.run_parsing import Parsing
 from preprocess.openpose.run_openpose import OpenPose
 
@@ -15,42 +17,42 @@ import argparse
 class LeffaPredictor(object):
     def __init__(self, **args):
         self.mask_predictor = AutoMasker(
-            densepose_path="./ckpts/densepose",
-            schp_path="./ckpts/schp",
+            densepose_path="/root/autodl-tmp/data/ckpts/densepose",
+            schp_path="/root/autodl-tmp/data/ckpts/schp",
         )
 
         self.densepose_predictor = DensePosePredictor(
-            config_path="./ckpts/densepose/densepose_rcnn_R_50_FPN_s1x.yaml",
-            weights_path="./ckpts/densepose/model_final_162be9.pkl",
+            config_path="/root/autodl-tmp/data/ckpts/densepose/densepose_rcnn_R_50_FPN_s1x.yaml",
+            weights_path="/root/autodl-tmp/data/ckpts/densepose/model_final_162be9.pkl",
         )
 
         self.parsing = Parsing(
-            atr_path="./ckpts/humanparsing/parsing_atr.onnx",
-            lip_path="./ckpts/humanparsing/parsing_lip.onnx",
+            atr_path="/root/autodl-tmp/data/ckpts/humanparsing/parsing_atr.onnx",
+            lip_path="/root/autodl-tmp/data/ckpts/humanparsing/parsing_lip.onnx",
         )
 
         self.openpose = OpenPose(
-            body_model_path="./ckpts/openpose/body_pose_model.pth",
+            body_model_path="/root/autodl-tmp/data/ckpts/openpose/body_pose_model.pth",
         )
 
         vt_model_hd = LeffaModel(
-            pretrained_model_name_or_path="./ckpts/stable-diffusion-inpainting",
-            pretrained_model="./ckpts/virtual_tryon.pth",
+            pretrained_model_name_or_path="/root/autodl-tmp/data/ckpts/stable-diffusion-inpainting",
+            pretrained_model="/root/autodl-tmp/data/ckpts/virtual_tryon.pth",
             # pretrained_model="../../StableVITON/ckpts/VITONHD.ckpt",
             dtype="float16",
         )
         self.vt_inference_hd = LeffaInference(model=vt_model_hd, use_fp16=args.get("use_fp16", False), low_resolution=args.get("low_resolution", False))
 
         # vt_model_dc = LeffaModel(
-        #     pretrained_model_name_or_path="./ckpts/stable-diffusion-inpainting",
-        #     pretrained_model="./ckpts/virtual_tryon_dc.pth",
+        #     pretrained_model_name_or_path="/root/autodl-tmp/data/ckpts/stable-diffusion-inpainting",
+        #     pretrained_model="/root/autodl-tmp/data/ckpts/virtual_tryon_dc.pth",
         #     dtype="float16",
         # )
         # self.vt_inference_dc = LeffaInference(model=vt_model_dc)
 
         # pt_model = LeffaModel(
-        #     pretrained_model_name_or_path="./ckpts/stable-diffusion-xl-1.0-inpainting-0.1",
-        #     pretrained_model="./ckpts/pose_transfer.pth",
+        #     pretrained_model_name_or_path="/root/autodl-tmp/data/ckpts/stable-diffusion-xl-1.0-inpainting-0.1",
+        #     pretrained_model="/root/autodl-tmp/data/ckpts/pose_transfer.pth",
         #     dtype="float16",
         # )
         # self.pt_inference = LeffaInference(model=pt_model)
@@ -169,17 +171,95 @@ class LeffaPredictor(object):
             scale,
             seed,
         )
+    
+    def leffa_predict_stream(
+        self,
+        src_image,
+        ref_image_path,
+        ref_acceleration=False,
+        step=10,
+        scale=2.5,
+        seed=42,
+        vt_model_type="viton_hd",
+        vt_garment_type="upper_body",
+        vt_repaint=False,
+        preprocess_garment=False,
+        low_resolution=False,
+    ):
+        # Resize the source image.
+        # src_image = resize_and_center(src_image, 768, 1024)
+        src_image = resize_to_fixed_size(src_image, 768, 1024)
+
+        # For virtual try-on, optionally preprocess the garment (reference) image.
+        if preprocess_garment:
+            if isinstance(ref_image_path, str) and ref_image_path.lower().endswith('.png'):
+                # preprocess_garment_image returns a 768x1024 image.
+                ref_image = preprocess_garment_image(ref_image_path)
+            else:
+                raise ValueError("Reference garment image must be a PNG file when preprocessing is enabled.")
+        else:
+            # Otherwise, load the reference image.
+            ref_image = Image.open(ref_image_path)
+            
+        ref_image = resize_and_center(ref_image, 768, 1024)
+
+        src_image_array = np.array(src_image)
+
+        src_image = src_image.convert("RGB")
+        model_parse, _ = self.parsing(src_image.resize((384, 512) if not low_resolution else (192, 256)))
+        keypoints = self.openpose(src_image.resize((384, 512) if not low_resolution else (192, 256)))
+        if vt_model_type == "viton_hd":
+            mask = get_agnostic_mask_hd(model_parse, keypoints, vt_garment_type)
+        elif vt_model_type == "dress_code":
+            mask = get_agnostic_mask_dc(model_parse, keypoints, vt_garment_type)
+        mask = mask.resize((768, 1024) if not low_resolution else (384, 512))
+
+        if vt_model_type == "viton_hd":
+            src_image_seg_array = self.densepose_predictor.predict_seg(src_image_array)[:, :, ::-1]
+            src_image_seg = Image.fromarray(src_image_seg_array)
+            densepose = src_image_seg
+        elif vt_model_type == "dress_code":
+            src_image_iuv_array = self.densepose_predictor.predict_iuv(src_image_array)
+            src_image_seg_array = src_image_iuv_array[:, :, 0:1]
+            src_image_seg_array = np.concatenate([src_image_seg_array] * 3, axis=-1)
+            src_image_seg = Image.fromarray(src_image_seg_array)
+            densepose = src_image_seg
+
+        transform = LeffaTransform(height=512, width=384)
+        data = {
+            "src_image": [src_image],
+            "ref_image": [ref_image],
+            "mask": [mask],
+            "densepose": [densepose],
+        }
+        data = transform(data)
+        if vt_model_type == "viton_hd":
+            inference = self.vt_inference_hd
+        # elif vt_model_type == "dress_code":
+        #     inference = self.vt_inference_dc
+        output = inference(
+            data,
+            ref_acceleration=ref_acceleration,
+            num_inference_steps=step,
+            guidance_scale=scale,
+            seed=seed,
+            repaint=vt_repaint,
+            low_resolution=low_resolution,
+        )
+        gen_image = resize_to_fixed_size(output["generated_image"][0], 480, 640)
+        return np.array(gen_image), np.array(mask), np.array(densepose)
+
 
 
 if __name__ == "__main__":
-    example_dir = "./ckpts/examples"
+    example_dir = "/root/autodl-tmp/data/ckpts/examples"
     person1_images = list_dir(f"{example_dir}/person1")
     person2_images = list_dir(f"{example_dir}/person2")
     garment_images = list_dir(f"{example_dir}/garment")
 
     argparser = argparse.ArgumentParser(description="Leffa Predictor")
     argparser.add_argument("--src_image", type=str, default=person1_images[0], help="Path to the source image")
-    argparser.add_argument("--ref_image", type=str, default=garment_images[0], help="Path to the reference image")
+    argparser.add_argument("--ref_image", type=str, default=garment_images[-1], help="Path to the reference image")
     # argparser.add_argument("--garment_image", type=str, default=garment_images[0], help="Path to the garment image")
     argparser.add_argument("--ref_acceleration", action="store_true", help="Enable reference acceleration")
     argparser.add_argument("--step", type=int, default=50, help="Number of inference steps")
@@ -212,7 +292,7 @@ if __name__ == "__main__":
     # Record start time
     import time
     start_time = time.time()
-    for _ in range(2):
+    for _ in range(50):
         gen_image, mask, densepose = leffa_predictor.leffa_predict_vt(
             src_image_path,
             ref_image_path,
@@ -228,6 +308,7 @@ if __name__ == "__main__":
     # Record end time
     end_time = time.time()
     print(f"Time taken for 50 iterations: {end_time - start_time} seconds")
+    print(f"Time taken for each iteration: {(end_time - start_time) / 50} seconds")
 
     # Save the generated image
     gen_image_pil = Image.fromarray(gen_image)

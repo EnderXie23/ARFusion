@@ -34,6 +34,21 @@ def resize_and_center(image, target_width, target_height):
     return Image.fromarray(padded_img)
 
 
+def resize_to_fixed_size(image, target_width, target_height):
+    img = np.array(image)
+
+    # 处理通道：统一转为 RGB
+    if img.shape[-1] == 4:
+        img = cv2.cvtColor(img, cv2.COLOR_RGBA2RGB)
+    elif len(img.shape) == 2 or img.shape[-1] == 1:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+
+    # 直接缩放为目标尺寸（不保持长宽比）
+    resized_img = cv2.resize(img, (target_width, target_height), interpolation=cv2.INTER_CUBIC)
+
+    return Image.fromarray(resized_img)
+
+
 def list_dir(folder_path):
     # Collect all file paths within the directory
     file_paths = []
