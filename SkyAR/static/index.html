@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sky Replacement Demo</title>
+  <style>
+    :root {
+      --primary-color: #4A90E2;
+      --secondary-color: #50E3C2;
+      --bg-color: #f5f7fa;
+      --text-color: #333;
+      --border-radius: 8px;
+      --padding: 12px;
+    }
+    body {
+      margin: 0;
+      font-family: sans-serif;
+      background: var(--bg-color);
+      color: var(--text-color);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: var(--padding);
+    }
+    h1 {
+      margin-bottom: 16px;
+      color: var(--primary-color);
+    }
+    #layout {
+      display: grid;
+      grid-template-columns: 1fr 300px;
+      gap: 20px;
+      width: 100%;
+      max-width: 1200px;
+    }
+    #canvases {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      max-width: 1000px;
+      max-height: 1000px;
+    }
+    .canvas-container {
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: var(--border-radius);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+      padding: var(--padding);
+      text-align: center;
+    }
+    canvas {
+      border-radius: var(--border-radius);
+      display: block;
+      margin: 0 auto;
+      background: #000;
+    }
+    #controls {
+      background: white;
+      border-radius: var(--border-radius);
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+      padding: var(--padding);
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      max-height: 750px;
+    }
+    label {
+      font-size: 0.9em;
+      display: block;
+    }
+    input[type="number"], select {
+      width: 100%;
+      padding: 6px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      box-sizing: border-box;
+      margin-top: 4px;
+    }
+    button {
+      background: var(--primary-color);
+      color: white;
+      border: none;
+      padding: 10px;
+      border-radius: var(--border-radius);
+      cursor: pointer;
+      font-size: 1em;
+      transition: background 0.2s;
+    }
+    button:disabled {
+      background: #aaa;
+      cursor: default;
+    }
+    button:hover:not(:disabled) {
+      background: var(--secondary-color);
+    }
+    .half {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    #ping {
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <h1>Sky Replacement Demo</h1>
+  <div id="layout">
+    <div id="canvases">
+      <div class="canvas-container">
+        <p>Processed Output<br><small>Ping: <span id="ping">-</span> ms</small></p>
+        <canvas id="outCanvas"></canvas>
+      </div>
+      <div class="canvas-container">
+        <p>Raw Video</p>
+        <canvas id="rawCanvas"></canvas>
+      </div>
+    </div>
+    <div id="controls">
+      <button id="start">Start</button>
+      <button id="stop" disabled>Stop</button>
+      <button id="cfg-update">Update Config</button>
+
+      <label>Generator Checkpoint
+        <select id="cfg-net-g"></select>
+      </label>
+      <label>Skybox
+        <select id="cfg-skybox"></select>
+      </label>
+      <div class="half">
+        <label>Input Width
+          <input id="cfg-in-w" type="number" value="384" min="100" max="600" />
+        </label>
+        <label>Input Height
+          <input id="cfg-in-h" type="number" value="384" min="100" max="600" />
+        </label>
+      </div>
+      <div class="half">
+        <label>Output Width
+          <input id="cfg-out-w" type="number" value="845" min="100" max="1200" />
+        </label>
+        <label>Output Height
+          <input id="cfg-out-h" type="number" value="480" min="100" max="600" />
+        </label>
+      </div>
+      <label>Center Crop
+        <input id="cfg-crop" type="number" step="0.01" value="0.5" min="0.1" max="1.0" />
+      </label>
+      <label><input id="cfg-auto-light" type="checkbox" /> Auto-Light Matching</label>
+      <label>Relighting Factor
+        <input id="cfg-relight" type="number" step="0.1" value="1.0" min="0.1" max="1.0" />
+      </label>
+      <label>Recoloring Factor
+        <input id="cfg-recolor" type="number" step="0.1" value="1.0" min="0.1" max="1.0" />
+      </label>
+      <label><input id="cfg-halo" type="checkbox" value="1" checked /> Halo Effect</label>
+      <label>Quality (JPEG)
+        <input id="cfg-quality" type="number" value="70" min="10" max="100"/>
+      </label>
+    </div>
+  </div>
+
+  <script>
+  (async () => {
+    const video = document.createElement('video');
+    video.autoplay = true;
+    video.playsInline = true;
+
+    const rawCanvas = document.getElementById('rawCanvas');
+    const outCanvas = document.getElementById('outCanvas');
+    const rawCtx    = rawCanvas.getContext('2d');
+    const outCtx    = outCanvas.getContext('2d');
+    const pingSpan  = document.getElementById('ping');
+
+    const startBtn = document.getElementById('start');
+    const stopBtn  = document.getElementById('stop');
+    const updBtn   = document.getElementById('cfg-update');
+
+    const cfgNetG      = document.getElementById('cfg-net-g');
+    const cfgSkybox    = document.getElementById('cfg-skybox');
+    const cfgInW       = document.getElementById('cfg-in-w');
+    const cfgInH       = document.getElementById('cfg-in-h');
+    const cfgOutW      = document.getElementById('cfg-out-w');
+    const cfgOutH      = document.getElementById('cfg-out-h');
+    const cfgCrop      = document.getElementById('cfg-crop');
+    const cfgAutoLight = document.getElementById('cfg-auto-light');
+    const cfgRelight   = document.getElementById('cfg-relight');
+    const cfgRecolor   = document.getElementById('cfg-recolor');
+    const cfgHalo      = document.getElementById('cfg-halo');
+    const cfgQuality   = document.getElementById('cfg-quality');
+
+    const ckptLookup = {
+      eff: './checkpoints',
+      bisenetv2: './checkpoints_bisenet',
+      alexnet: './checkpoints_alex',
+      coord_resnet101: './checkpoints101',
+      coord_resnet50: './checkpoints_G_coord_resnet50'
+    };
+    const skyboxes = [
+      'galaxy.jpg','cloudy.jpg','sunny.jpg','sunset.jpg',
+      'supermoon.jpg','jupiter.jpg','district9ship.jpg',
+      'floatingcastle.jpg','thunderstorm.mp4'
+    ];
+
+    Object.keys(ckptLookup).forEach(key => cfgNetG.append(new Option(key, key)));
+    skyboxes.forEach(name => cfgSkybox.append(new Option(name, name)));
+
+    let ws, streaming=false, sendInterval, lastSentTime=0, sending=false;
+    let loopInterval = 50;
+    let updating = false;
+
+    function getConfig() {
+      const outW = parseInt(cfgOutW.value,10);
+      const outH = parseInt(cfgOutH.value,10);
+      return {
+        type: 'config',
+        net_G: cfgNetG.value,
+        input_mode: "video",
+        datadir: "./test_videos/test.mp4",
+        output_dir: "./jpg_output",
+        save_jpgs: false,
+        ckptdir: ckptLookup[cfgNetG.value],
+        skybox: cfgSkybox.value,
+        in_size_w: parseInt(cfgInW.value,10),
+        in_size_h: parseInt(cfgInH.value,10),
+        out_size_w: outW,
+        out_size_h: outH,
+        skybox_center_crop: parseFloat(cfgCrop.value),
+        auto_light_matching: cfgAutoLight.checked,
+        relighting_factor: parseFloat(cfgRelight.value),
+        recoloring_factor: parseFloat(cfgRecolor.value),
+        halo_effect: cfgHalo.checked,
+        width: Math.min(outW, 800),
+        height: Math.min(outH, 480),
+        quality: parseInt(cfgQuality.value,10)
+      };
+    }
+
+    function updateCanvasSizes() {
+      const { width, height } = getConfig();
+      rawCanvas.width  = width;
+      rawCanvas.height = height;
+      outCanvas.width  = width;
+      outCanvas.height = height;
+
+      // Draw "No Signal" on canvas
+      outCtx.fillStyle = 'black';
+      outCtx.fillRect(0, 0, outCanvas.width, outCanvas.height);
+      outCtx.fillStyle = 'white';
+      outCtx.font = '30px Arial';
+      outCtx.textAlign = 'center';
+      outCtx.fillText('Waiting for signal.', outCanvas.width / 2, outCanvas.height / 2);
+      rawCtx.fillStyle = 'black';
+      rawCtx.fillRect(0, 0, rawCanvas.width, rawCanvas.height);
+      rawCtx.fillStyle = 'white';
+      rawCtx.font = '30px Arial';
+      rawCtx.textAlign = 'center';
+      rawCtx.fillText('Waiting for signal.', rawCanvas.width / 2, rawCanvas.height / 2);
+    }
+
+    function rawLoop() {
+      if (video.readyState >= 2) rawCtx.drawImage(video, 0, 0, rawCanvas.width, rawCanvas.height);
+      requestAnimationFrame(rawLoop);
+    }
+    requestAnimationFrame(rawLoop);
+
+    startBtn.onclick = async () => {
+      updateCanvasSizes();
+      const stream = await navigator.mediaDevices.getUserMedia({ video:true });
+      video.srcObject = stream;
+
+      ws = new WebSocket(`ws://${location.host}/ws`);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        ws.send(JSON.stringify(getConfig()));
+        streaming = true;
+        startBtn.disabled = true;
+        stopBtn.disabled  = false;
+
+        sendInterval = setInterval(async () => {
+          if (!streaming || sending || ws.bufferedAmount>1e6) return;
+          sending = true;
+          const blob = await new Promise(r=>rawCanvas.toBlob(r,'image/jpeg',getConfig().quality/100));
+          ws.send(await blob.arrayBuffer());
+          lastSentTime = performance.now();
+          sending = false;
+        }, loopInterval);
+      };
+
+      ws.onmessage = evt => {
+        pingSpan.textContent = Math.round(performance.now() - lastSentTime);
+        const img = new Image();
+        img.onload = () => outCtx.drawImage(img, 0, 0, outCanvas.width, outCanvas.height);
+        img.src = URL.createObjectURL(new Blob([evt.data],{type:'image/jpeg'}));
+      };
+
+      ws.onclose = () => {
+        streaming = false;
+        clearInterval(sendInterval);
+        startBtn.disabled = updating;
+        stopBtn.disabled  = true;
+        (stream.getTracks()||[]).forEach(t=>t.stop());
+      };
+    };
+
+    stopBtn.onclick = () => {
+      ws && ws.close();
+      updateCanvasSizes();
+    }
+    updBtn.onclick  = () => {
+      updating = true;
+      stopBtn.click();
+      updateCanvasSizes();
+      if (ws && ws.readyState===WebSocket.OPEN) {
+        ws.send(JSON.stringify(getConfig()));
+      }
+      setTimeout(() => {
+        startBtn.disabled = false;
+        startBtn.click();
+        updating = false;
+      }, 1000);
+    };
+  })();
+  </script>
+</body>
+</html>

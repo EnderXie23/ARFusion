@@ -1,0 +1,8 @@
+__pycache__/
+test.py
+
+sky_frames/
+leffa_frames/
+
+*.jpg
+*.mp4

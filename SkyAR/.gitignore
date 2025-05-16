@@ -1,0 +1,14 @@
+__pycache__/
+
+checkpoints/*
+checkpoints_alex
+checkpoints_bisenet
+checkpoints_G_coord_resnet50
+checkpoints101
+datasets
+
+val_out*
+nohup*
+
+demo-cat.mp4
+demo.mp4
