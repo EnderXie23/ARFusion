@@ -3,6 +3,7 @@ import os
 import numpy as np
 from PIL import Image
 import cv2
+
 from leffa.transform import LeffaTransform
 from leffa.model import LeffaModel
 from leffa.inference import LeffaInference
@@ -16,28 +17,30 @@ import argparse
 
 class LeffaPredictor(object):
     def __init__(self, **args):
+        base_path = "/home/xmy/ARFusion/Leffa/"
+
         self.mask_predictor = AutoMasker(
-            densepose_path="/root/autodl-tmp/data/ckpts/densepose",
-            schp_path="/root/autodl-tmp/data/ckpts/schp",
+            densepose_path=base_path + "ckpts/densepose",
+            schp_path=base_path + "ckpts/schp",
         )
 
         self.densepose_predictor = DensePosePredictor(
-            config_path="/root/autodl-tmp/data/ckpts/densepose/densepose_rcnn_R_50_FPN_s1x.yaml",
-            weights_path="/root/autodl-tmp/data/ckpts/densepose/model_final_162be9.pkl",
+            config_path=base_path + "ckpts/densepose/densepose_rcnn_R_50_FPN_s1x.yaml",
+            weights_path=base_path + "ckpts/densepose/model_final_162be9.pkl",
         )
 
         self.parsing = Parsing(
-            atr_path="/root/autodl-tmp/data/ckpts/humanparsing/parsing_atr.onnx",
-            lip_path="/root/autodl-tmp/data/ckpts/humanparsing/parsing_lip.onnx",
+            atr_path=base_path + "ckpts/humanparsing/parsing_atr.onnx",
+            lip_path=base_path + "ckpts/humanparsing/parsing_lip.onnx",
         )
 
         self.openpose = OpenPose(
-            body_model_path="/root/autodl-tmp/data/ckpts/openpose/body_pose_model.pth",
+            body_model_path=base_path + "ckpts/openpose/body_pose_model.pth",
         )
 
         vt_model_hd = LeffaModel(
-            pretrained_model_name_or_path="/root/autodl-tmp/data/ckpts/stable-diffusion-inpainting",
-            pretrained_model="/root/autodl-tmp/data/ckpts/virtual_tryon.pth",
+            pretrained_model_name_or_path=base_path + "ckpts/stable-diffusion-inpainting",
+            pretrained_model=base_path + "ckpts/virtual_tryon.pth",
             # pretrained_model="../../StableVITON/ckpts/VITONHD.ckpt",
             dtype="float16",
         )
@@ -252,7 +255,7 @@ class LeffaPredictor(object):
 
 
 if __name__ == "__main__":
-    example_dir = "/root/autodl-tmp/data/ckpts/examples"
+    example_dir = "./ckpts/examples"
     person1_images = list_dir(f"{example_dir}/person1")
     person2_images = list_dir(f"{example_dir}/person2")
     garment_images = list_dir(f"{example_dir}/garment")

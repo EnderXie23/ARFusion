@@ -18,6 +18,8 @@ import cv2
 import numpy as np
 from PIL import Image
 from torch.utils import data
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from utils.transforms import get_affine_transform
 
 

@@ -1,0 +1,36 @@
+{
+  "skyar": {
+    "net_G": "eff",
+    "ckptdir": "./checkpoints",
+    "input_mode": "video",
+    "datadir": "../test.mp4",
+    "skybox": "galaxy.jpg",
+    "in_size_w": 384,
+    "in_size_h": 384,
+    "out_size_w": 480,
+    "out_size_h": 845,
+    "skybox_center_crop": 0.5,
+    "auto_light_matching": false,
+    "relighting_factor": 0.8,
+    "recoloring_factor": 0.5,
+    "halo_effect": true,
+    "output_dir": "../jpg_output",
+    "save_jpgs": false
+  },
+  "leffa": {
+    "use_fp16": false,
+    "low_resolution": false,
+    "step": 15,
+    "scale": 2.5,
+    "seed": 42,
+    "vt_model_type": "viton_hd",
+    "vt_garment_type": "upper_body",
+    "vt_repaint": false,
+    "preprocess_garment": false,
+    "num_workers": 4
+  },
+  "video": {
+    "ref_image": "../garment.jpg",
+    "output_dir": "../"
+  }
+}
