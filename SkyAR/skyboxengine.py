@@ -148,13 +148,13 @@ class SkyBox():
         # Filter only valid points
         idx = np.where(status == 1)[0]
         if idx.size == 0:
-            print('no good point matched 1.')
+            print('no good valid point.')
             return np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32)
             # return None
 
         prev_pts, curr_pts = removeOutliers(prev_pts, curr_pts)
 
-        if curr_pts.shape[0] < 5:
+        if curr_pts.shape[0] < 4:
             print(f'no good point matched. Expected at least 5, got {curr_pts.shape[0]}')
             return np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float32)
             # return None

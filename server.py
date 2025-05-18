@@ -17,7 +17,7 @@ from concurrent.futures import ProcessPoolExecutor
 import threading
 
 USE_LEFFA = False
-os.chdir('/home/xmy/ARFusion/SkyAR')
+os.chdir('SkyAR')
 if USE_LEFFA:
     leffa_executor = ProcessPoolExecutor(max_workers=3, initializer=leffa_worker.init_worker)
     src_image_path = "/root/autodl-tmp/data/ckpts/examples/person1/01350_00.jpg"

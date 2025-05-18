@@ -230,7 +230,7 @@ class SkyFilterBatched(SkyFilter):
             size1=(self.out_size_w, self.out_size_h),
             size2=(2 * self.out_size_w, self.out_size_h),
         )
-        self.batch_size = 4
+        self.batch_size = getattr(args, 'batch_size', 2)
         self.cali_size = 4
         self.skyengines = [SkyBox(args) for _ in range(self.batch_size)]
 
