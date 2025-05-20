@@ -230,7 +230,7 @@ class SkyFilterBatched(SkyFilter):
             size1=(self.out_size_w, self.out_size_h),
             size2=(2 * self.out_size_w, self.out_size_h),
         )
-        self.batch_size = getattr(args, 'batch_size', 2)
+        self.batch_size = getattr(args, 'batch_size', 4)
         self.cali_size = 4
         self.skyengines = [SkyBox(args) for _ in range(self.batch_size)]
 
@@ -265,7 +265,7 @@ class SkyFilterBatched(SkyFilter):
             if idx % batch_cali == 0:
                 self.calibrate_skyengine()
                 img_HD_prev_batch = [img_HD_prev_batch[self.batch_size-1]] * self.batch_size
-                print('Calibration at frame', idx)
+                # print('Calibration at frame', idx)
             results = self.synthesize_batch(img_HD_batch, img_HD_prev_batch)
             img_HD_prev_batch = img_HD_batch.copy()
 

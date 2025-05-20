@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 
 # Path to your unified JSON config
-CONFIG_PATH = 'config.json'
+CONFIG_PATH = '../config.json'
 
 os.chdir('SkyAR')
 
