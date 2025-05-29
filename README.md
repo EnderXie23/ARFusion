@@ -67,7 +67,9 @@ Then, run the server with:
 uvicorn server:app --host 127.0.0.1 --port 8001 --reload
 ```
 
-On your local machine (also install `uvicon[standard]`), run:
+For a beatiful web-UI based access, simply click on the URL and open up the webpage in your browser.
+
+Or for a software based access, on your local machine (also install `uvicon[standard]`), run:
 ```bash
 python frontend.py
 ```
